@@ -28,7 +28,7 @@
 
 ## 📸 预览
 
-![面板预览](screenshot.png)
+![面板预览](img/screenshot.png)
 
 ## 🛠 技术栈
 
