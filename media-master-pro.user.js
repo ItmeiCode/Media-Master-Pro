@@ -1,18 +1,27 @@
 // ==UserScript==
 // @name         Media Master Pro - 视频音频增强控制
 // @namespace    https://github.com/ItmeiCode/Media-Master-Pro
-// @version      3.0.9
+// @version      3.1.4
 // @description  智能媒体控制器：倍速调节、音量增益、站点记忆、加密存储、视频旋转、画中画、窗口全屏
 // @author       itmei
 // @match        *://*/*
 // @grant        none
-// @run-at       document-idle
+// @run-at       document-start
 // @license      MIT
 // @icon         data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237c7cf8' stroke-width='2'%3E%3Cpath d='M3 18v-6a9 9 0 0 1 18 0v6'/%3E%3Cpath d='M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z'/%3E%3C/svg%3E
 // ==/UserScript==
 
 (() => {
     'use strict';
+
+    window.addEventListener('keydown', (e) => {
+        if ((e.key === 'Escape' || e.key === 'Esc') && window.__MM_FS_ACTIVE) {
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+            window.__MM_FS_TOGGLE?.();
+        }
+    }, true);
 
     // ============================================================
     // 模块1: 安全存储引擎
@@ -80,11 +89,13 @@
             active: false,
             video: null,
             root: null,
-            parent: null,
-            next: null,
-            videoStyle: null,
-            rootStyle: null,
-            escHandler: null
+            videoStyle: '',
+            rootStyle: '',
+            ancestorStyles: [],
+            hidden: [],
+            keep: [],
+            bar: null,
+            unbindBar: null
         };
 
         let _rotationDeg = 0;
@@ -253,7 +264,6 @@
             const curEl = bar.querySelector('[data-role="cur"]');
             const durEl = bar.querySelector('[data-role="dur"]');
             let seeking = false;
-            let hideTimer = 0;
 
             const sync = () => {
                 const dur = video.duration;
@@ -272,10 +282,10 @@
                 video.currentTime = Math.min(dur, Math.max(0, ratio * dur));
             };
 
-            const showBar = () => {
-                bar.classList.add('show');
-                win.clearTimeout(hideTimer);
-                hideTimer = win.setTimeout(() => bar.classList.remove('show'), 2200);
+            const showBar = () => bar.classList.add('show');
+            const hideBar = () => {
+                if (bar.matches(':hover') || seeking) return;
+                bar.classList.remove('show');
             };
 
             const onPlay = () => sync();
@@ -324,18 +334,18 @@
             seek.addEventListener('change', onSeekChange);
             doc.addEventListener('keydown', onKey);
             doc.addEventListener('mousemove', showBar);
-            bar.addEventListener('mouseenter', () => { bar.classList.add('show'); win.clearTimeout(hideTimer); });
-            bar.addEventListener('mouseleave', showBar);
+            doc.addEventListener('mouseenter', showBar, true);
+            doc.documentElement.addEventListener('mouseleave', hideBar);
+            bar.addEventListener('mouseenter', showBar);
+            bar.addEventListener('mouseleave', hideBar);
 
             stage.appendChild(video);
             root.appendChild(stage);
             root.appendChild(bar);
             doc.body.appendChild(root);
             sync();
-            showBar();
 
             return () => {
-                win.clearTimeout(hideTimer);
                 video.removeEventListener('play', onPlay);
                 video.removeEventListener('pause', onPause);
                 video.removeEventListener('timeupdate', onTime);
@@ -347,6 +357,10 @@
                 seek.removeEventListener('change', onSeekChange);
                 doc.removeEventListener('keydown', onKey);
                 doc.removeEventListener('mousemove', showBar);
+                doc.removeEventListener('mouseenter', showBar, true);
+                doc.documentElement.removeEventListener('mouseleave', hideBar);
+                bar.removeEventListener('mouseenter', showBar);
+                bar.removeEventListener('mouseleave', hideBar);
             };
         };
 
@@ -458,7 +472,7 @@
                     position:absolute; left:0; right:0; bottom:0; z-index:5;
                 }
                 .mm-pip-root { position:relative; }
-                .mm-pip-bar.show, .mm-pip-root:hover .mm-pip-bar { opacity:1; transform:none; }
+                .mm-pip-bar.show { opacity:1; transform:none; }
                 .mm-pip-play {
                     width:28px; height:28px; border:0; border-radius:6px; cursor:pointer;
                     background:rgba(255,255,255,.08); color:#fff; font-size:12px;
@@ -495,47 +509,146 @@
             _unmaskOriginalForPip();
         });
 
+        const _CONTROL_HINT = [
+            '[class*="control"]', '[class*="ctrlbar"]', '[class*="ctrl-bar"]',
+            '[class*="dashboard"]', '[class*="progress"]', '[class*="toolbar"]',
+            '[class*="bottom-bar"]', '[class*="controlbar"]',
+            '[class*="kui-"]', '[class*="h5-ctrl"]', '[class*="h5player"]',
+            '.kui-dashboard', '.h5player-dashboard', '#module_playbar', '[role="slider"]'
+        ].join(',');
+
+        const _hasControlBar = (root, video) => {
+            if (!root || root === video) return false;
+            const nodes = root.querySelectorAll(_CONTROL_HINT);
+            for (const n of nodes) {
+                if (n !== video && !video.contains(n)) return true;
+            }
+            return false;
+        };
+
+        const _markFloatingControls = (video, root) => {
+            const keep = [];
+            document.querySelectorAll(_CONTROL_HINT).forEach(el => {
+                if (root.contains(el) || el.contains(video)) return;
+                if (el.id === 'mm-panel' || el.closest('#mm-panel')) return;
+                const st = getComputedStyle(el);
+                const floating = ['fixed', 'absolute', 'sticky'].includes(st.position)
+                    || el.parentElement === document.body;
+                if (!floating) return;
+                const r = el.getBoundingClientRect();
+                const w = Math.max(r.width, el.offsetWidth, 0);
+                if (w < 80 && el.parentElement !== document.body) return;
+                el.classList.add('mm-fs-keep');
+                keep.push(el);
+            });
+            return keep;
+        };
+
+        const _hideOtherBranches = (root) => {
+            const hidden = [];
+            let node = root;
+            while (node && node !== document.documentElement) {
+                const parent = node.parentElement;
+                if (!parent) break;
+                for (const sib of [...parent.children]) {
+                    if (sib === node) continue;
+                    if (sib.id === 'mm-panel' || sib.id === 'mm-styles' || sib.id === FS_STYLE_ID) continue;
+                    if (sib.classList.contains('mm-fs-keep') || sib.id === 'mm-fs-bar') continue;
+                    if (sib.tagName === 'SCRIPT' || sib.tagName === 'STYLE' || sib.tagName === 'LINK') continue;
+                    const token = `${sib.className || ''} ${sib.id || ''}`.toLowerCase();
+                    if (/control|ctrlbar|dashboard|progress|toolbar|playbar|kui-|h5-ctrl|h5player/.test(token)) {
+                        sib.classList.add('mm-fs-keep');
+                        continue;
+                    }
+                    hidden.push({
+                        el: sib,
+                        vis: sib.style.getPropertyValue('visibility'),
+                        visPri: sib.style.getPropertyPriority('visibility'),
+                        pe: sib.style.getPropertyValue('pointer-events'),
+                        pePri: sib.style.getPropertyPriority('pointer-events')
+                    });
+                    sib.style.setProperty('visibility', 'hidden', 'important');
+                    sib.style.setProperty('pointer-events', 'none', 'important');
+                }
+                node = parent;
+            }
+            return hidden;
+        };
+
+        const _unlockAncestors = (root) => {
+            const saved = [];
+            let node = root.parentElement;
+            while (node && node !== document.documentElement) {
+                saved.push({ el: node, css: node.getAttribute('style') || '' });
+                node.style.setProperty('transform', 'none', 'important');
+                node.style.setProperty('filter', 'none', 'important');
+                node.style.setProperty('perspective', 'none', 'important');
+                node.style.setProperty('contain', 'none', 'important');
+                node.style.setProperty('clip-path', 'none', 'important');
+                node.style.setProperty('overflow', 'visible', 'important');
+                node = node.parentElement;
+            }
+            return saved;
+        };
+
         // 找到包含控件的播放器外壳，避免只挪 <video> 导致进度条丢失
         const _findPlayerRoot = (video) => {
-            const known = video.closest([
+            const selectors = [
+                '#ykPlayer', '#youkuplayer', '.yk-player', '.youku-player',
+                '.youku-film-player', '.kui-player', '.h5-player', '.h5player',
                 '.mgp', '.mgp_container', '.mgp_player',
                 '#player', '#video-player',
-                '.html5-video-player', '.html5-video-container',
+                '.html5-video-player',
                 '.bpx-player-container', '.bilibili-player',
                 '.xgplayer', '.dplayer', '.jwplayer', '.video-js',
                 '.artplayer', '.plyr', '.fp-player',
-                '[class*="video-player"]', '[class*="player-container"]',
-                '[class*="player-wrapper"]'
-            ].join(','));
-            if (known && known !== document.body && known !== document.documentElement) {
-                return known;
-            }
+                '[class*="player-container"]', '[class*="player-wrapper"]',
+                '[class*="video-player"]', '.html5-video-container'
+            ];
 
-            let node = video.parentElement;
-            let best = video;
             const vr = video.getBoundingClientRect();
             const vw = Math.max(video.clientWidth, vr.width);
             const vh = Math.max(video.clientHeight, vr.height);
+            const tooHuge = (el) => {
+                const r = el.getBoundingClientRect();
+                return r.width > innerWidth * 0.98 && r.height > innerHeight * 0.92;
+            };
 
-            for (let i = 0; i < 10 && node && node !== document.body && node !== document.documentElement; i++) {
+            let withControls = null;
+            for (const sel of selectors) {
+                const hit = video.closest(sel);
+                if (!hit || hit === document.body || hit === document.documentElement) continue;
+                if (tooHuge(hit)) continue;
+                if (_hasControlBar(hit, video)) withControls = hit;
+            }
+            if (withControls) return withControls;
+
+            let node = video.parentElement;
+            let best = video;
+            for (let i = 0; i < 12 && node && node !== document.body && node !== document.documentElement; i++) {
                 const r = node.getBoundingClientRect();
                 if (r.width < 16 || r.height < 16) {
                     node = node.parentElement;
                     continue;
                 }
-                const stillPlayer = r.width <= Math.max(vw * 1.3, vw + 48)
-                    && r.height <= Math.max(vh * 1.85, vh + 140);
+                if (tooHuge(node)) break;
+                const stillPlayer = r.width <= Math.max(vw * 1.35, vw + 64)
+                    && r.height <= Math.max(vh * 2.1, vh + 180);
                 const compactPage = r.width <= innerWidth * 0.98
-                    && r.height <= innerHeight * 0.98
-                    && (r.width * r.height) / Math.max(vw * vh, 1) < 4;
+                    && r.height <= innerHeight * 0.92
+                    && (r.width * r.height) / Math.max(vw * vh, 1) < 5;
                 if (stillPlayer || compactPage) {
+                    if (_hasControlBar(node, video)) withControls = node;
                     best = node;
                     node = node.parentElement;
                     continue;
                 }
+                if (_hasControlBar(node, video) && r.height <= innerHeight) {
+                    withControls = node;
+                }
                 break;
             }
-            return best;
+            return withControls || best;
         };
 
         const _maskOriginalForPip = (source) => {
@@ -605,99 +718,212 @@
                     clip-path: none !important;
                     will-change: auto !important;
                 }
-                html.${FS_CLASS} body > *:not(#${FS_ID}):not(#mm-panel):not(#mm-pip-mask) {
-                    visibility: hidden !important;
-                    pointer-events: none !important;
-                }
-                #${FS_ID} {
+                html.${FS_CLASS} .mm-fs-player {
                     position: fixed !important;
                     inset: 0 !important;
                     width: 100vw !important;
                     height: 100vh !important;
-                    z-index: 2147483646 !important;
+                    max-width: none !important;
+                    max-height: none !important;
+                    z-index: 2147483645 !important;
                     background: #000 !important;
-                    display: flex !important;
-                    align-items: center !important;
-                    justify-content: center !important;
-                    overflow: hidden !important;
                     margin: 0 !important;
-                    padding: 0 !important;
-                    border: none !important;
+                    transform: none !important;
+                    visibility: visible !important;
+                    pointer-events: auto !important;
+                }
+                html.${FS_CLASS} .mm-fs-keep,
+                html.${FS_CLASS} .mm-fs-player [class*="control"],
+                html.${FS_CLASS} .mm-fs-player [class*="ctrlbar"],
+                html.${FS_CLASS} .mm-fs-player [class*="dashboard"],
+                html.${FS_CLASS} .mm-fs-player [class*="progress"],
+                html.${FS_CLASS} .mm-fs-player [class*="toolbar"],
+                html.${FS_CLASS} .mm-fs-player [class*="kui-"] {
+                    z-index: 2147483646 !important;
+                    opacity: 1 !important;
                     visibility: visible !important;
                     pointer-events: auto !important;
                     transform: none !important;
-                    filter: none !important;
-                    isolation: isolate !important;
-                }
-                #${FS_ID},
-                #${FS_ID} * {
-                    visibility: visible !important;
                 }
                 html.${FS_CLASS} #mm-panel {
                     z-index: 2147483647 !important;
                     visibility: visible !important;
                     pointer-events: auto !important;
                 }
+                #mm-fs-bar {
+                    position: fixed !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
+                    z-index: 2147483646 !important; display: flex !important; align-items: center !important;
+                    gap: 10px !important; padding: 12px 16px 16px !important;
+                    background: linear-gradient(180deg, transparent, rgba(0,0,0,.78)) !important;
+                    color: #fff !important; font: 13px/1.2 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+                    opacity: 0 !important; transform: translateY(16px) !important;
+                    pointer-events: none !important; transition: opacity .2s ease, transform .2s ease !important;
+                }
+                #mm-fs-bar.show {
+                    opacity: 1 !important; transform: none !important; pointer-events: auto !important;
+                }
+                #mm-fs-bar button {
+                    width: 32px; height: 32px; border: 0; border-radius: 8px; cursor: pointer;
+                    background: rgba(255,255,255,.1); color: #fff; font-size: 13px;
+                }
+                #mm-fs-bar .mm-fs-time { min-width: 40px; opacity: .85; font-variant-numeric: tabular-nums; }
+                #mm-fs-bar input[type="range"] {
+                    flex: 1; height: 5px; appearance: none; background: rgba(255,255,255,.2);
+                    border-radius: 5px; outline: none; cursor: pointer;
+                }
+                #mm-fs-bar input[type="range"]::-webkit-slider-thumb {
+                    appearance: none; width: 14px; height: 14px; border-radius: 50%;
+                    background: #fbbf24; border: 0; cursor: pointer;
+                }
             `;
             document.documentElement.appendChild(css);
         };
 
         const _restoreFsPlace = () => {
-            const root = _fs.root;
-            const parent = _fs.parent;
-            if (root && parent && parent.isConnected) {
-                if (_fs.next && _fs.next.parentNode === parent) {
-                    parent.insertBefore(root, _fs.next);
-                } else {
-                    parent.appendChild(root);
-                }
-            } else if (root && document.body) {
-                document.body.appendChild(root);
-            }
+            window.__MM_FS_ACTIVE = false;
+            _fs.hidden.forEach(({ el, vis, visPri, pe, pePri }) => {
+                if (vis) el.style.setProperty('visibility', vis, visPri || undefined);
+                else el.style.removeProperty('visibility');
+                if (pe) el.style.setProperty('pointer-events', pe, pePri || undefined);
+                else el.style.removeProperty('pointer-events');
+            });
+            _fs.ancestorStyles.forEach(({ el, css }) => {
+                if (css) el.setAttribute('style', css);
+                else el.removeAttribute('style');
+            });
             if (_fs.video) {
                 if (_fs.videoStyle) _fs.video.setAttribute('style', _fs.videoStyle);
                 else _fs.video.removeAttribute('style');
             }
-            if (root && root !== _fs.video && _fs.rootStyle !== undefined) {
-                if (_fs.rootStyle) root.setAttribute('style', _fs.rootStyle);
-                else root.removeAttribute('style');
+            if (_fs.root) {
+                _fs.root.classList.remove('mm-fs-player');
+                if (_fs.rootStyle) _fs.root.setAttribute('style', _fs.rootStyle);
+                else _fs.root.removeAttribute('style');
             }
-            document.getElementById(FS_ID)?.remove();
+            _fs.keep.forEach(el => el.classList.remove('mm-fs-keep'));
+            try { _fs.unbindBar?.(); } catch {}
+            _fs.bar?.remove();
             document.documentElement.classList.remove(FS_CLASS);
-            if (_fs.escHandler) {
-                document.removeEventListener('keydown', _fs.escHandler);
-            }
             _fs = {
                 active: false,
                 video: null,
                 root: null,
-                parent: null,
-                next: null,
-                videoStyle: null,
-                rootStyle: null,
-                escHandler: null
+                videoStyle: '',
+                rootStyle: '',
+                ancestorStyles: [],
+                hidden: [],
+                keep: [],
+                bar: null,
+                unbindBar: null
             };
+            document.dispatchEvent(new CustomEvent('mm-fs-change'));
         };
 
-        const _applyFillStyle = (el, isVideo) => {
+        const _applyFillStyle = (el, isVideo, keepOverlay) => {
             el.style.setProperty('width', '100%', 'important');
-            el.style.setProperty('height', '100%', 'important');
             el.style.setProperty('max-width', 'none', 'important');
             el.style.setProperty('max-height', 'none', 'important');
             el.style.setProperty('margin', '0', 'important');
-            el.style.setProperty('padding', isVideo ? '0' : el.style.padding || '0', 'important');
             el.style.setProperty('border', 'none', 'important');
-            el.style.setProperty('display', isVideo ? 'block' : 'flex', 'important');
             if (!isVideo) {
-                el.style.setProperty('align-items', 'center', 'important');
-                el.style.setProperty('justify-content', 'center', 'important');
-                el.style.setProperty('overflow', 'hidden', 'important');
+                el.style.setProperty('height', '100%', 'important');
+                el.style.setProperty('display', 'block', 'important');
                 el.style.setProperty('position', 'relative', 'important');
+                el.style.setProperty('overflow', keepOverlay ? 'visible' : 'hidden', 'important');
                 el.style.setProperty('inset', 'auto', 'important');
-                el.style.setProperty('flex', '1 1 auto', 'important');
             } else {
                 el.style.setProperty('object-fit', 'contain', 'important');
+                el.style.setProperty('display', 'block', 'important');
+                if (!keepOverlay) el.style.setProperty('height', '100%', 'important');
             }
+        };
+
+        const _mountFsBar = (video) => {
+            document.getElementById('mm-fs-bar')?.remove();
+            const bar = document.createElement('div');
+            bar.id = 'mm-fs-bar';
+            bar.innerHTML = `
+                <button type="button" data-role="play">❚❚</button>
+                <span class="mm-fs-time" data-role="cur">0:00</span>
+                <input type="range" min="0" max="1000" step="1" value="0">
+                <span class="mm-fs-time" data-role="dur">0:00</span>
+            `;
+            const playBtn = bar.querySelector('[data-role="play"]');
+            const seek = bar.querySelector('input');
+            const curEl = bar.querySelector('[data-role="cur"]');
+            const durEl = bar.querySelector('[data-role="dur"]');
+            let seeking = false;
+
+            const sync = () => {
+                const dur = video.duration;
+                const cur = video.currentTime || 0;
+                playBtn.textContent = video.paused ? '▶' : '❚❚';
+                curEl.textContent = _fmtTime(cur);
+                durEl.textContent = _fmtTime(dur);
+                if (!seeking && Number.isFinite(dur) && dur > 0) {
+                    seek.value = String(Math.round((cur / dur) * 1000));
+                }
+            };
+            const seekTo = (ratio) => {
+                const dur = video.duration;
+                if (!Number.isFinite(dur) || dur <= 0) return;
+                video.currentTime = Math.min(dur, Math.max(0, ratio * dur));
+            };
+            const onPlayClick = () => {
+                if (video.paused) video.play().catch(() => {});
+                else video.pause();
+            };
+            const onSeekInput = () => {
+                seeking = true;
+                seekTo(Number(seek.value) / 1000);
+                curEl.textContent = _fmtTime(video.currentTime);
+            };
+            const onSeekChange = () => {
+                seekTo(Number(seek.value) / 1000);
+                seeking = false;
+                sync();
+            };
+
+            video.addEventListener('play', sync);
+            video.addEventListener('pause', sync);
+            video.addEventListener('timeupdate', sync);
+            video.addEventListener('durationchange', sync);
+            playBtn.addEventListener('click', onPlayClick);
+            seek.addEventListener('input', onSeekInput);
+            seek.addEventListener('change', onSeekChange);
+
+            const showBar = () => bar.classList.add('show');
+            const hideBar = () => {
+                if (bar.matches(':hover') || seeking) return;
+                bar.classList.remove('show');
+            };
+            document.addEventListener('mousemove', showBar);
+            document.addEventListener('mouseenter', showBar, true);
+            document.documentElement.addEventListener('mouseleave', hideBar);
+            bar.addEventListener('mouseenter', showBar);
+            bar.addEventListener('mouseleave', hideBar);
+
+            document.body.appendChild(bar);
+            sync();
+
+            return {
+                bar,
+                unbind() {
+                    video.removeEventListener('play', sync);
+                    video.removeEventListener('pause', sync);
+                    video.removeEventListener('timeupdate', sync);
+                    video.removeEventListener('durationchange', sync);
+                    playBtn.removeEventListener('click', onPlayClick);
+                    seek.removeEventListener('input', onSeekInput);
+                    seek.removeEventListener('change', onSeekChange);
+                    document.removeEventListener('mousemove', showBar);
+                    document.removeEventListener('mouseenter', showBar, true);
+                    document.documentElement.removeEventListener('mouseleave', hideBar);
+                    bar.removeEventListener('mouseenter', showBar);
+                    bar.removeEventListener('mouseleave', hideBar);
+                    bar.remove();
+                }
+            };
         };
 
         // ============ 窗口全屏（视频充满当前窗口，压住页面其它层） ============
@@ -714,39 +940,38 @@
                 if (!target) return { success: false, msg: '未找到视频' };
 
                 const root = _findPlayerRoot(target);
-                const parent = root.parentNode;
-                if (!parent) return { success: false, msg: '无法获取视频容器' };
+                if (!root) return { success: false, msg: '无法获取视频容器' };
 
                 _injectFsStyle();
+                const keep = _markFloatingControls(target, root);
+                const ancestorStyles = _unlockAncestors(root);
+                const hidden = _hideOtherBranches(root);
 
                 _fs = {
                     active: true,
                     video: target,
                     root,
-                    parent,
-                    next: root.nextSibling,
                     videoStyle: target.getAttribute('style') || '',
-                    rootStyle: root === target ? undefined : (root.getAttribute('style') || ''),
-                    escHandler: null
+                    rootStyle: root.getAttribute('style') || '',
+                    ancestorStyles,
+                    hidden,
+                    keep
                 };
 
-                const container = document.createElement('div');
-                container.id = FS_ID;
-                document.body.appendChild(container);
-                container.appendChild(root);
+                root.classList.add('mm-fs-player');
+                target.style.setProperty('width', '100%', 'important');
+                target.style.setProperty('height', '100%', 'important');
+                target.style.setProperty('max-width', 'none', 'important');
+                target.style.setProperty('max-height', 'none', 'important');
+                target.style.setProperty('object-fit', 'contain', 'important');
                 document.documentElement.classList.add(FS_CLASS);
+                window.__MM_FS_ACTIVE = true;
 
-                if (root !== target) _applyFillStyle(root, false);
-                _applyFillStyle(target, true);
+                const mounted = _mountFsBar(target);
+                _fs.bar = mounted.bar;
+                _fs.unbindBar = mounted.unbind;
 
-                const escHandler = (e) => {
-                    if (e.key === 'Escape' && _fs.active) {
-                        toggleWindowFullscreen();
-                    }
-                };
-                _fs.escHandler = escHandler;
-                document.addEventListener('keydown', escHandler);
-
+                document.dispatchEvent(new CustomEvent('mm-fs-change'));
                 return { success: true, msg: '已进入窗口全屏', isFullscreen: true };
             } catch (err) {
                 console.warn('[MediaMaster] 窗口全屏失败:', err);
@@ -876,6 +1101,8 @@
             }
         };
     })();
+
+    window.__MM_FS_TOGGLE = () => { MediaEngine.toggleWindowFullscreen(); };
 
     // ============================================================
     // 模块3: 浮动面板 UI
@@ -1391,15 +1618,18 @@
 
             // 监听 ESC 键退出全屏（由 MediaEngine 处理）
             // 但我们需要同步UI状态
+            document.addEventListener('mm-fs-change', () => {
+                _syncButtons();
+                _updateStatus(statusEl);
+            });
             document.addEventListener('keydown', (e) => {
-                if (e.key === 'Escape' && MediaEngine.isWindowFullscreen()) {
-                    // 延迟更新UI（等待MediaEngine处理）
+                if ((e.key === 'Escape' || e.key === 'Esc') && MediaEngine.isWindowFullscreen()) {
                     setTimeout(() => {
                         _syncButtons();
                         _updateStatus(statusEl);
                     }, 200);
                 }
-            });
+            }, true);
 
             // 监听画中画退出事件
             document.addEventListener('leavepictureinpicture', () => {
@@ -1583,7 +1813,7 @@
                 }, 800);
             });
 
-            console.log('🎯 Media Master Pro v3.0.9 已加载');
+            console.log('🎯 Media Master Pro v3.1.4 已加载');
             console.log('  ⌨ Ctrl+Shift+M  → 切换面板');
             console.log('  ⌨ Ctrl+Shift+F  → 窗口全屏（视频充满当前窗口）');
             console.log('  ⌨ ESC           → 退出窗口全屏');
