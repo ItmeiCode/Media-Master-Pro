@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Media Master Pro - 视频音频增强控制
 // @namespace    https://github.com/ItmeiCode/Media-Master-Pro
-// @version      3.1.4
-// @description  智能媒体控制器：倍速调节、音量增益、站点记忆、加密存储、视频旋转、画中画、窗口全屏
+// @version      3.2.0
+// @description  智能媒体控制器：倍速调节、音量增益、站点记忆、加密存储、视频旋转、画中画、窗口全屏、空闲悬浮球
 // @author       itmei
 // @match        *://*/*
 // @grant        none
@@ -376,7 +376,7 @@
                     el.style.setProperty('height', '100vw', 'important');
                     el.style.setProperty('max-width', 'none', 'important');
                     el.style.setProperty('max-height', 'none', 'important');
-                } else {
+                        } else {
                     el.style.setProperty('width', '100%', 'important');
                     el.style.setProperty('height', '100%', 'important');
                     el.style.setProperty('max-width', '100%', 'important');
@@ -417,7 +417,7 @@
                         if (parent?.isConnected) parent.appendChild(video);
                     } catch {}
                 }
-            } else {
+                } else {
                 placeholder?.remove();
             }
 
@@ -435,7 +435,7 @@
 
             _closeDocPip();
             const parent = video.parentNode;
-            if (!parent) return { success: false, msg: '无法获取视频容器' };
+                    if (!parent) return { success: false, msg: '无法获取视频容器' };
 
             const rect = video.getBoundingClientRect();
             const placeholder = document.createElement('div');
@@ -719,15 +719,15 @@
                     will-change: auto !important;
                 }
                 html.${FS_CLASS} .mm-fs-player {
-                    position: fixed !important;
+                        position: fixed !important;
                     inset: 0 !important;
-                    width: 100vw !important;
-                    height: 100vh !important;
+                        width: 100vw !important;
+                        height: 100vh !important;
                     max-width: none !important;
                     max-height: none !important;
                     z-index: 2147483645 !important;
                     background: #000 !important;
-                    margin: 0 !important;
+                        margin: 0 !important;
                     transform: none !important;
                     visibility: visible !important;
                     pointer-events: auto !important;
@@ -1029,7 +1029,7 @@
                     if (inMediaPiP || inDocPiP) {
                         if (inDocPiP) _closeDocPip();
                         if (document.pictureInPictureElement) {
-                            await document.exitPictureInPicture();
+                        await document.exitPictureInPicture();
                         } else if (target?.webkitSetPresentationMode && target.webkitPresentationMode === 'picture-in-picture') {
                             target.webkitSetPresentationMode('inline');
                         }
@@ -1111,12 +1111,63 @@
         let _panel = null;
         let _visible = false;
         let _closed = false;
+        let _fab = false;
+        let _idleTimer = null;
+        let _morphTimer = null;
+        let _panelH = 0;
+        let _fabPos = null;
         let _speed = 1;
         let _gain = 1;
         let _rotation = 0;
         let _statusTimer = null;
+        const IDLE_MS = 10000;
+        const FAB_SIZE = 56;
+        const PANEL_W = 280;
+        const MORPH_MS = 400;
+        const VIEW_MARGIN = 8;
 
-        // --- 样式注入 ---
+        const _clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
+        const _fitBox = (x, y, w, h) => {
+            const maxX = Math.max(VIEW_MARGIN, innerWidth - w - VIEW_MARGIN);
+            const maxY = Math.max(VIEW_MARGIN, innerHeight - h - VIEW_MARGIN);
+            return {
+                x: _clamp(x, VIEW_MARGIN, maxX),
+                y: _clamp(y, VIEW_MARGIN, maxY),
+                w,
+                h: Math.min(h, innerHeight - VIEW_MARGIN * 2)
+            };
+        };
+
+        const _snapInView = () => {
+            if (!_panel || _fab) return;
+            const r = _panel.getBoundingClientRect();
+            const fit = _fitBox(r.left, r.top, r.width, r.height);
+            if (Math.abs(fit.x - r.left) > 0.5 || Math.abs(fit.y - r.top) > 0.5) {
+                _panel.style.right = 'auto';
+                _panel.style.bottom = 'auto';
+                _panel.style.left = fit.x + 'px';
+                _panel.style.top = fit.y + 'px';
+            }
+        };
+
+        const _saveFabPos = (x, y) => {
+            const fit = _fitBox(x, y, FAB_SIZE, FAB_SIZE);
+            _fabPos = { x: fit.x, y: fit.y };
+        };
+
+        const _fabTarget = (panelRect) => {
+            if (_fabPos) return _fitBox(_fabPos.x, _fabPos.y, FAB_SIZE, FAB_SIZE);
+            return _fitBox(panelRect.right - FAB_SIZE, panelRect.bottom - FAB_SIZE, FAB_SIZE, FAB_SIZE);
+        };
+
+        const _applyFabPos = () => {
+            if (!_panel || !_fabPos) return;
+            _panel.style.right = 'auto';
+            _panel.style.bottom = 'auto';
+            _panel.style.left = _fabPos.x + 'px';
+            _panel.style.top = _fabPos.y + 'px';
+        };
         const _injectStyles = () => {
             if (document.getElementById('mm-styles')) return;
             const css = document.createElement('style');
@@ -1136,13 +1187,93 @@
                     color: #eaeef2;
                     box-shadow: 0 20px 64px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.04);
                     user-select: none;
-                    transition: opacity 0.2s ease, transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+                    overflow: hidden;
+                    transition: opacity 0.2s ease, transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
+                        width 0.38s cubic-bezier(0.4, 0, 0.2, 1),
+                        height 0.38s cubic-bezier(0.4, 0, 0.2, 1),
+                        padding 0.38s cubic-bezier(0.4, 0, 0.2, 1),
+                        border-radius 0.38s cubic-bezier(0.4, 0, 0.2, 1),
+                        box-shadow 0.38s cubic-bezier(0.4, 0, 0.2, 1),
+                        left 0.38s cubic-bezier(0.4, 0, 0.2, 1),
+                        top 0.38s cubic-bezier(0.4, 0, 0.2, 1);
                     transform-origin: bottom right;
+                }
+                .mm-overlay:not(.mm-fab):not(.mm-fab-busy) {
+                    max-height: calc(100dvh - 16px);
+                    overflow-x: hidden;
+                    overflow-y: auto;
+                }
+                .mm-panel-body {
+                    opacity: 1;
+                    transition: opacity 0.22s ease 0.14s;
+                }
+                .mm-overlay.mm-fab-busy .mm-panel-body {
+                    opacity: 0;
+                    pointer-events: none;
+                    transition: opacity 0.12s ease;
+                }
+                .mm-overlay.mm-fab:not(.mm-fab-busy) .mm-panel-body {
+                    display: none !important;
                 }
                 .mm-overlay.mm-hidden {
                     opacity: 0;
                     transform: scale(0.92) translateY(12px);
                     pointer-events: none;
+                }
+                .mm-fab-icon {
+                    display: flex;
+                    opacity: 0;
+                    visibility: hidden;
+                    pointer-events: none;
+                    position: absolute;
+                    inset: 0;
+                    align-items: center;
+                    justify-content: center;
+                    color: #9b9bf8;
+                    z-index: 2;
+                    transition: opacity 0.18s ease, visibility 0s linear 0.18s;
+                }
+                .mm-overlay.mm-fab .mm-fab-icon {
+                    opacity: 1;
+                    visibility: visible;
+                    transition: opacity 0.18s ease 0.06s, visibility 0s;
+                }
+                .mm-overlay.mm-fab-busy .mm-fab-icon {
+                    opacity: 0;
+                    visibility: hidden;
+                    transition: opacity 0.1s ease, visibility 0s linear 0.1s;
+                }
+                .mm-overlay.mm-fab {
+                    width: 56px;
+                    height: 56px;
+                    padding: 0;
+                    border-radius: 50%;
+                    cursor: pointer;
+                    opacity: 0.68;
+                    background: rgba(18, 18, 26, 0.72);
+                    box-shadow: 0 8px 24px rgba(91, 91, 239, 0.25), 0 6px 20px rgba(0, 0, 0, 0.35);
+                }
+                .mm-fab-icon svg {
+                    width: 26px;
+                    height: 26px;
+                    pointer-events: none;
+                }
+                .mm-overlay.mm-fab:hover:not(.mm-fab-busy) {
+                    opacity: 1;
+                    background: rgba(18, 18, 26, 0.95);
+                    transform: scale(1.06);
+                    box-shadow: 0 10px 32px rgba(91, 91, 239, 0.4), 0 8px 28px rgba(0, 0, 0, 0.5);
+                }
+                .mm-overlay.mm-fab-busy {
+                    pointer-events: none;
+                    will-change: width, height, left, top, padding, border-radius, box-shadow;
+                    backdrop-filter: none !important;
+                    -webkit-backdrop-filter: none !important;
+                }
+                .mm-overlay.mm-fab-busy.mm-fab-closing .mm-panel-body {
+                    opacity: 0;
+                    pointer-events: none;
+                    transition: opacity 0.1s ease;
                 }
                 .mm-drag {
                     position: absolute; top: 0; left: 0; right: 0; height: 44px;
@@ -1391,6 +1522,145 @@
             document.head.appendChild(css);
         };
 
+        const _clearMorphTimer = () => {
+            if (_morphTimer) {
+                clearTimeout(_morphTimer);
+                _morphTimer = null;
+            }
+        };
+
+        const _pinRect = (r) => {
+            _panel.style.right = 'auto';
+            _panel.style.bottom = 'auto';
+            _panel.style.left = r.left + 'px';
+            _panel.style.top = r.top + 'px';
+            _panel.style.width = r.width + 'px';
+            _panel.style.height = r.height + 'px';
+        };
+
+        const _prepareMorph = () => {
+            _panel.scrollTop = 0;
+            const body = _panel.querySelector('.mm-panel-body');
+            if (body) body.scrollTop = 0;
+            const r = _panel.getBoundingClientRect();
+            _pinRect(r);
+            return _panel.getBoundingClientRect();
+        };
+
+        const _clearMorphStyle = () => {
+            _panel.style.width = '';
+            _panel.style.height = '';
+            _panel.style.padding = '';
+            _panel.style.borderRadius = '';
+            _panel.style.boxShadow = '';
+        };
+
+        const _finishMorph = (onDone) => {
+            _clearMorphTimer();
+            if (!_panel) return;
+            const closing = _panel.classList.contains('mm-fab-closing');
+            const opening = _panel.classList.contains('mm-fab-opening');
+            _panel.classList.remove('mm-fab-busy', 'mm-fab-opening', 'mm-fab-closing');
+            _clearMorphStyle();
+            if (closing) {
+                _fab = true;
+                _panel.classList.add('mm-fab');
+                _panel.title = '点击展开控制面板';
+                const fr = _panel.getBoundingClientRect();
+                _saveFabPos(fr.left, fr.top);
+                _applyFabPos();
+            } else if (opening) {
+                _fab = false;
+                _panel.classList.remove('mm-fab');
+                _panel.title = '';
+                _panelH = _panel.offsetHeight;
+                _snapInView();
+            }
+            onDone?.();
+        };
+
+        const _watchMorph = (onDone) => {
+            let finished = false;
+            const finish = () => {
+                if (finished) return;
+                finished = true;
+                _panel.removeEventListener('transitionend', onEnd);
+                _finishMorph(onDone);
+            };
+            const onEnd = (e) => {
+                if (e.target !== _panel || e.propertyName !== 'height') return;
+                finish();
+            };
+            _panel.addEventListener('transitionend', onEnd);
+            _morphTimer = setTimeout(finish, MORPH_MS + 100);
+        };
+
+        const _clearIdle = () => {
+            if (_idleTimer) {
+                clearTimeout(_idleTimer);
+                _idleTimer = null;
+            }
+        };
+
+        const _armIdle = () => {
+            _clearIdle();
+            if (!_visible || _closed || _fab || !_panel) return;
+            _idleTimer = setTimeout(_shrinkToFab, IDLE_MS);
+        };
+
+        const _shrinkToFab = () => {
+            if (!_panel || !_visible || _closed || _fab || _panel.classList.contains('mm-fab-busy')) return;
+            const r = _prepareMorph();
+            _panelH = r.height;
+            const fit = _fabTarget(r);
+
+            _panel.classList.add('mm-fab-busy', 'mm-fab-closing');
+
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    _panel.style.width = fit.w + 'px';
+                    _panel.style.height = fit.h + 'px';
+                    _panel.style.left = fit.x + 'px';
+                    _panel.style.top = fit.y + 'px';
+                    _panel.style.padding = '0px';
+                    _panel.style.borderRadius = '50%';
+                    _panel.style.boxShadow = '0 10px 32px rgba(91,91,239,0.4), 0 8px 28px rgba(0,0,0,0.5)';
+                });
+            });
+
+            _watchMorph(() => _clearIdle());
+        };
+
+        const _expandFromFab = () => {
+            if (!_panel || !_fab || _panel.classList.contains('mm-fab-busy')) return;
+            const r = _prepareMorph();
+            _saveFabPos(r.left, r.top);
+            const anchorRight = r.right;
+            const anchorBottom = r.bottom;
+            const fit = _fitBox(anchorRight - PANEL_W, anchorBottom - (_panelH || 420), PANEL_W, _panelH || 420);
+
+            _panel.classList.add('mm-fab-busy', 'mm-fab-opening');
+
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    _panel.classList.remove('mm-fab');
+                    _panel.style.width = fit.w + 'px';
+                    _panel.style.height = fit.h + 'px';
+                    _panel.style.left = fit.x + 'px';
+                    _panel.style.top = fit.y + 'px';
+                    _panel.style.padding = '';
+                    _panel.style.borderRadius = '';
+                    _panel.style.boxShadow = '';
+                });
+            });
+
+            _watchMorph(() => {
+                _armIdle();
+                _updateStatus();
+                _syncButtons();
+            });
+        };
+
         const _updateStatus = (el) => {
             const info = MediaEngine.getInfo();
             if (!el) el = _panel?.querySelector('#mm-status');
@@ -1410,7 +1680,7 @@
         const _startStatusLoop = () => {
             if (_statusTimer) clearInterval(_statusTimer);
             _statusTimer = setInterval(() => {
-                if (_visible && _panel) {
+                if (_visible && _panel && !_fab && !_panel.classList.contains('mm-fab-busy')) {
                     _updateStatus();
                     _syncButtons();
                 }
@@ -1471,6 +1741,13 @@
             _panel.className = 'mm-overlay';
             _panel.id = 'mm-panel';
             _panel.innerHTML = `
+                <div class="mm-fab-icon" aria-hidden="true">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 18v-6a9 9 0 0 1 18 0v6"/>
+                        <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>
+                    </svg>
+                </div>
+                <div class="mm-panel-body">
                 <div class="mm-drag" id="mm-drag"></div>
                 <div class="mm-header">
                     <h3>🎛 媒体大师</h3>
@@ -1497,10 +1774,12 @@
                 <div class="mm-status" id="mm-status">⏳ 初始化...</div>
                 <div class="mm-actions">
                     <button class="mm-btn" id="mm-reset">↺ 重置</button>
+                    <button class="mm-btn" id="mm-fab-btn" title="缩小为悬浮球">◉ 悬浮球</button>
                     <button class="mm-btn primary" id="mm-close">✕ 关闭</button>
                 </div>
                 <div class="mm-footer">
                     ⌨ 切换面板 <kbd>Ctrl+Shift+M</kbd> &nbsp;|&nbsp; 窗口全屏 <kbd>Ctrl+Shift+F</kbd>
+                </div>
                 </div>
             `;
             document.body.appendChild(_panel);
@@ -1644,6 +1923,11 @@
             // 关闭
             _panel.querySelector('#mm-close').addEventListener('click', _hide);
 
+            // 手动缩小为悬浮球
+            _panel.querySelector('#mm-fab-btn').addEventListener('click', () => {
+                if (!_fab && !_panel.classList.contains('mm-fab-busy')) _shrinkToFab();
+            });
+
             // 重置所有
             _panel.querySelector('#mm-reset').addEventListener('click', () => {
                 _speed = 1; _gain = 1; _rotation = 0;
@@ -1658,38 +1942,69 @@
                 _updateStatus(statusEl);
             });
 
-            // --- 拖拽 ---
-            let dragging = false, ox = 0, oy = 0;
+            // --- 拖拽 / 悬浮球 ---
+            let dragging = false, ox = 0, oy = 0, dragMoved = false, fabPress = false, sx = 0, sy = 0;
             const dragEl = _panel.querySelector('#mm-drag');
-            dragEl.addEventListener('mousedown', (e) => {
-                if (e.target.closest('.mm-btn') || e.target.closest('.mm-tool-btn')) return;
+            const beginDrag = (e) => {
                 dragging = true;
+                dragMoved = false;
+                sx = e.clientX;
+                sy = e.clientY;
                 const r = _panel.getBoundingClientRect();
                 ox = e.clientX - r.left;
                 oy = e.clientY - r.top;
                 _panel.style.transition = 'none';
                 e.preventDefault();
+            };
+            dragEl.addEventListener('mousedown', (e) => {
+                if (e.target.closest('.mm-btn') || e.target.closest('.mm-tool-btn')) return;
+                beginDrag(e);
+            });
+            _panel.addEventListener('mousedown', (e) => {
+                if (!_fab || _panel.classList.contains('mm-fab-busy')) return;
+                fabPress = true;
+                beginDrag(e);
             });
             document.addEventListener('mousemove', (e) => {
                 if (!dragging) return;
+                if (Math.hypot(e.clientX - sx, e.clientY - sy) > 4) dragMoved = true;
                 let x = e.clientX - ox, y = e.clientY - oy;
-                x = Math.max(0, Math.min(innerWidth - _panel.offsetWidth, x));
-                y = Math.max(0, Math.min(innerHeight - _panel.offsetHeight, y));
+                const w = _panel.offsetWidth, h = _panel.offsetHeight;
+                x = Math.max(0, Math.min(innerWidth - w, x));
+                y = Math.max(0, Math.min(innerHeight - h, y));
                 _panel.style.left = x + 'px';
                 _panel.style.right = 'auto';
                 _panel.style.bottom = 'auto';
                 _panel.style.top = y + 'px';
+                if (!_fab) _armIdle();
             });
             document.addEventListener('mouseup', () => {
-                if (dragging) { dragging = false; _panel.style.transition = ''; }
+                if (!dragging) return;
+                const wasFabClick = fabPress && _fab && !dragMoved;
+                dragging = false;
+                fabPress = false;
+                _panel.style.transition = '';
+                if (wasFabClick) {
+                    _expandFromFab();
+                } else if (_fab && dragMoved) {
+                    _saveFabPos(_panel.getBoundingClientRect().left, _panel.getBoundingClientRect().top);
+                } else if (!_fab) {
+                    _snapInView();
+                }
             });
             dragEl.addEventListener('dblclick', () => {
+                if (_fab || _panel.classList.contains('mm-fab-busy')) return;
+                _fabPos = null;
                 _panel.style.left = 'auto';
                 _panel.style.right = '28px';
                 _panel.style.bottom = '28px';
                 _panel.style.top = 'auto';
                 _panel.style.transition = 'all 0.3s ease';
                 setTimeout(() => { _panel.style.transition = ''; }, 300);
+            });
+
+            ['pointerdown', 'pointermove', 'wheel', 'input', 'keydown'].forEach((type) => {
+                _panel.addEventListener(type, () => { if (!_fab) _armIdle(); }, { passive: true });
             });
 
             // 初始应用旋转
@@ -1711,6 +2026,8 @@
             _panel.style.display = '';
             _visible = true;
             _closed = false;
+            if (_fab) _expandFromFab();
+            else _armIdle();
             setTimeout(() => {
                 _updateStatus();
                 _syncButtons();
@@ -1719,6 +2036,12 @@
 
         const _hide = () => {
             if (!_panel) return;
+            _clearIdle();
+            _clearMorphTimer();
+            _fab = false;
+            _fabPos = null;
+            _panel.classList.remove('mm-fab', 'mm-fab-busy', 'mm-fab-opening', 'mm-fab-closing');
+            _clearMorphStyle();
             _panel.classList.add('mm-hidden');
             setTimeout(() => { if (_panel) _panel.style.display = 'none'; }, 250);
             _visible = false;
@@ -1726,7 +2049,10 @@
         };
 
         const _toggle = () => {
-            if (_visible) {
+            if (_panel?.classList.contains('mm-fab-busy')) return;
+            if (_visible && _fab) {
+                _expandFromFab();
+            } else if (_visible) {
                 _hide();
             } else {
                 _show();
@@ -1813,8 +2139,8 @@
                 }, 800);
             });
 
-            console.log('🎯 Media Master Pro v3.1.4 已加载');
-            console.log('  ⌨ Ctrl+Shift+M  → 切换面板');
+            console.log('🎯 Media Master Pro v3.2.0 已加载');
+            console.log('  ⌨ Ctrl+Shift+M  → 切换面板（悬浮球时展开）');
             console.log('  ⌨ Ctrl+Shift+F  → 窗口全屏（视频充满当前窗口）');
             console.log('  ⌨ ESC           → 退出窗口全屏');
         };
