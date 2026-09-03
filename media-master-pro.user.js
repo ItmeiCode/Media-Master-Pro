@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Media Master Pro - 视频音频增强控制
 // @namespace    https://github.com/ItmeiCode/Media-Master-Pro
-// @version      3.2.0
+// @version      3.2.1
 // @description  智能媒体控制器：倍速调节、音量增益、站点记忆、加密存储、视频旋转、画中画、窗口全屏、空闲悬浮球
 // @author       itmei
 // @match        *://*/*
@@ -1122,7 +1122,8 @@
         let _statusTimer = null;
         const IDLE_MS = 10000;
         const FAB_SIZE = 56;
-        const PANEL_W = 280;
+        const PANEL_W = 308;
+        const MM_VER = '3.2.1';
         const MORPH_MS = 400;
         const VIEW_MARGIN = 8;
 
@@ -1169,23 +1170,26 @@
             _panel.style.top = _fabPos.y + 'px';
         };
         const _injectStyles = () => {
-            if (document.getElementById('mm-styles')) return;
-            const css = document.createElement('style');
-            css.id = 'mm-styles';
+            let css = document.getElementById('mm-styles');
+            if (!css) {
+                css = document.createElement('style');
+                css.id = 'mm-styles';
+                document.head.appendChild(css);
+            }
             css.textContent = `
                 .mm-overlay {
                     position: fixed; bottom: 28px; right: 28px;
                     z-index: 2147483647;
-                    width: 280px;
-                    background: rgba(18,18,26,0.95);
-                    backdrop-filter: blur(20px);
-                    -webkit-backdrop-filter: blur(20px);
-                    border: 1px solid rgba(255,255,255,0.07);
-                    border-radius: 20px;
-                    padding: 20px 22px 16px;
+                    width: 308px;
+                    background: linear-gradient(165deg, rgba(24,24,34,0.97), rgba(13,13,20,0.98));
+                    backdrop-filter: blur(22px) saturate(1.15);
+                    -webkit-backdrop-filter: blur(22px) saturate(1.15);
+                    border: 1px solid rgba(124,124,248,0.13);
+                    border-radius: 18px;
+                    padding: 18px 16px 18px;
                     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                     color: #eaeef2;
-                    box-shadow: 0 20px 64px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.04);
+                    box-shadow: 0 22px 60px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.04);
                     user-select: none;
                     overflow: hidden;
                     transition: opacity 0.2s ease, transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
@@ -1206,6 +1210,7 @@
                 .mm-panel-body {
                     opacity: 1;
                     transition: opacity 0.22s ease 0.14s;
+                    padding-bottom: 2px;
                 }
                 .mm-overlay.mm-fab-busy .mm-panel-body {
                     opacity: 0;
@@ -1294,73 +1299,94 @@
                 .mm-drag:hover::after { background: rgba(255,255,255,0.14); }
                 .mm-header {
                     display: flex; align-items: center; justify-content: space-between;
-                    margin-bottom: 16px; padding-top: 4px;
+                    margin-bottom: 14px; padding-top: 2px;
                     pointer-events: none;
                 }
                 .mm-header h3 {
-                    font-size: 15px; font-weight: 600; letter-spacing: 0.3px;
-                    margin: 0; color: #f0f2f5;
+                    font-size: 15px; font-weight: 700; letter-spacing: 0.2px;
+                    margin: 0;
+                    background: linear-gradient(90deg, #f2f2ff, #b4b4ff);
+                    -webkit-background-clip: text;
+                    background-clip: text;
+                    -webkit-text-fill-color: transparent;
                 }
                 .mm-header .tag {
-                    font-size: 10px; font-weight: 400;
-                    background: rgba(255,255,255,0.06);
-                    padding: 3px 12px; border-radius: 30px;
-                    color: rgba(255,255,255,0.35);
-                    max-width: 100px;
+                    font-size: 10px; font-weight: 500;
+                    font-family: 'SF Mono', Consolas, monospace;
+                    background: rgba(124,124,248,0.08);
+                    border: 1px solid rgba(124,124,248,0.12);
+                    padding: 4px 10px; border-radius: 20px;
+                    color: rgba(186,186,255,0.8);
+                    max-width: 118px;
                     overflow: hidden;
                     text-overflow: ellipsis;
                     white-space: nowrap;
                 }
-                .mm-row { margin: 10px 0 12px; }
+                .mm-row {
+                    margin: 0 0 10px;
+                    padding: 10px 12px;
+                    border-radius: 12px;
+                    background: rgba(255,255,255,0.025);
+                    border: 1px solid rgba(255,255,255,0.04);
+                }
                 .mm-row-label {
                     display: flex; justify-content: space-between;
                     font-size: 12px; font-weight: 500;
-                    color: rgba(255,255,255,0.5);
-                    margin-bottom: 5px;
+                    color: rgba(255,255,255,0.55);
+                    margin-bottom: 8px;
                 }
-                .mm-row-label .val { color: #fff; font-weight: 600; }
-                .mm-row-label .val.gold { color: #fbbf24; }
+                .mm-row-label .val { color: #fff; font-weight: 600; font-variant-numeric: tabular-nums; }
+                .mm-row-label .val.gold { color: #fcd34d; }
                 .mm-row-label .val.cyan { color: #5eead4; }
                 .mm-slider {
                     -webkit-appearance: none; appearance: none;
-                    width: 100%; height: 4px; border-radius: 4px;
+                    width: 100%; height: 5px; border-radius: 999px;
                     background: rgba(255,255,255,0.08);
-                    outline: none; margin: 4px 0;
-                }
-                .mm-slider::-webkit-slider-track {
-                    -webkit-appearance: none; height: 4px; border-radius: 4px;
-                    background: rgba(255,255,255,0.08);
+                    outline: none; margin: 2px 0 0;
+                    cursor: pointer;
                 }
                 .mm-slider::-webkit-slider-thumb {
                     -webkit-appearance: none; appearance: none;
-                    width: 17px; height: 17px; border-radius: 50%;
-                    background: linear-gradient(135deg, #7c7cf8, #5b5bef);
-                    cursor: pointer; border: 2px solid rgba(255,255,255,0.10);
-                    box-shadow: 0 2px 12px rgba(91,91,239,0.35);
+                    width: 16px; height: 16px; border-radius: 50%;
+                    margin-top: -5.5px;
+                    background: linear-gradient(135deg, #9494ff, #6b6bf0);
+                    cursor: pointer; border: 2px solid rgba(255,255,255,0.14);
+                    box-shadow: 0 2px 10px rgba(91,91,239,0.4), 0 0 0 3px rgba(91,91,239,0.1);
                     transition: transform 0.15s, box-shadow 0.15s;
                 }
-                .mm-slider::-webkit-slider-thumb:hover { transform: scale(1.12); box-shadow: 0 4px 20px rgba(91,91,239,0.5); }
-                .mm-slider::-moz-range-track { height: 4px; border-radius: 4px; background: rgba(255,255,255,0.08); border: none; }
+                .mm-slider::-webkit-slider-thumb:hover { transform: scale(1.08); }
+                .mm-slider::-moz-range-track { height: 5px; border-radius: 999px; background: rgba(255,255,255,0.08); border: none; }
                 .mm-slider::-moz-range-thumb {
-                    width: 17px; height: 17px; border-radius: 50%;
-                    background: linear-gradient(135deg, #7c7cf8, #5b5bef);
-                    cursor: pointer; border: 2px solid rgba(255,255,255,0.10);
+                    width: 16px; height: 16px; border-radius: 50%;
+                    background: linear-gradient(135deg, #9494ff, #6b6bf0);
+                    cursor: pointer; border: 2px solid rgba(255,255,255,0.14);
                 }
                 .mm-slider.gold::-webkit-slider-thumb {
-                    background: linear-gradient(135deg, #fbbf24, #f59e0b);
-                    box-shadow: 0 2px 12px rgba(245,158,11,0.35);
+                    background: linear-gradient(135deg, #fcd34d, #f59e0b);
+                    box-shadow: 0 2px 10px rgba(245,158,11,0.4), 0 0 0 3px rgba(245,158,11,0.1);
                 }
                 .mm-slider.gold::-moz-range-thumb {
-                    background: linear-gradient(135deg, #fbbf24, #f59e0b);
-                    box-shadow: 0 2px 12px rgba(245,158,11,0.35);
+                    background: linear-gradient(135deg, #fcd34d, #f59e0b);
                 }
                 .mm-status {
-                    font-size: 11px; color: rgba(255,255,255,0.30);
-                    text-align: center; padding: 10px 0 4px;
-                    border-top: 1px solid rgba(255,255,255,0.04);
-                    margin-top: 6px; line-height: 1.6;
+                    font-size: 11px; color: rgba(255,255,255,0.42);
+                    text-align: center; padding: 10px 12px;
+                    margin-top: 10px; line-height: 1.5;
+                    min-height: 52px;
+                    box-sizing: border-box;
+                    border-radius: 12px;
+                    background: rgba(255,255,255,0.03);
+                    border: 1px solid rgba(255,255,255,0.05);
+                    display: flex; flex-direction: column; justify-content: center; gap: 3px;
                 }
-                .mm-status .hl { color: rgba(255,255,255,0.55); }
+                .mm-status-line {
+                    overflow: hidden;
+                    display: -webkit-box;
+                    -webkit-line-clamp: 2;
+                    -webkit-box-orient: vertical;
+                }
+                .mm-status-vol { font-size: 10px; color: rgba(255,255,255,0.35); }
+                .mm-status .hl { color: rgba(255,255,255,0.72); font-weight: 600; }
                 .mm-status .pip-active {
                     color: #5eead4 !important;
                     font-weight: 500 !important;
@@ -1377,149 +1403,199 @@
                 /* 工具按钮组 */
                 .mm-tools-group {
                     display: flex !important;
+                    flex-direction: column !important;
+                    gap: 10px !important;
+                    margin: 4px 0 0 !important;
+                    padding: 12px !important;
+                    border-radius: 12px !important;
+                    background: rgba(255,255,255,0.025) !important;
+                    border: 1px solid rgba(255,255,255,0.04) !important;
+                }
+                .mm-tools-head {
+                    display: flex !important;
                     align-items: center !important;
                     justify-content: space-between !important;
-                    margin: 6px 0 2px !important;
-                    padding: 4px 0 !important;
-                    flex-wrap: wrap !important;
-                    gap: 3px !important;
                 }
                 .mm-tools-group .label {
                     font-size: 12px !important;
-                    font-weight: 500 !important;
-                    color: rgba(255,255,255,0.5) !important;
+                    font-weight: 600 !important;
+                    color: rgba(255,255,255,0.6) !important;
                 }
                 .mm-tools-group .badge {
                     font-size: 11px !important;
                     font-weight: 600 !important;
                     color: #5eead4 !important;
-                    min-width: 44px !important;
-                    text-align: center !important;
+                    background: rgba(94,234,212,0.1) !important;
+                    border: 1px solid rgba(94,234,212,0.14) !important;
+                    padding: 2px 10px !important;
+                    border-radius: 20px !important;
+                    min-width: auto !important;
+                }
+                .mm-tools-btns {
+                    display: grid !important;
+                    grid-template-columns: 1fr auto 1fr 1fr !important;
+                    gap: 7px !important;
                 }
                 .mm-tool-btn {
-                    padding: 3px 8px !important;
-                    border: none !important;
-                    border-radius: 6px !important;
+                    padding: 7px 6px !important;
+                    border: 1px solid transparent !important;
+                    border-radius: 10px !important;
                     font-size: 11px !important;
                     font-weight: 500 !important;
                     cursor: pointer !important;
                     font-family: inherit !important;
-                    background: rgba(255,255,255,0.05) !important;
-                    color: rgba(255,255,255,0.45) !important;
-                    transition: all 0.2s !important;
-                    line-height: 1.6 !important;
+                    background: rgba(255,255,255,0.04) !important;
+                    color: rgba(255,255,255,0.55) !important;
+                    transition: all 0.18s ease !important;
+                    line-height: 1.4 !important;
                     white-space: nowrap !important;
                 }
                 .mm-tool-btn:hover {
-                    background: rgba(255,255,255,0.12) !important;
+                    background: rgba(255,255,255,0.1) !important;
                     color: #fff !important;
                 }
                 .mm-tool-btn.active {
-                    background: rgba(94, 234, 212, 0.15) !important;
+                    border-color: rgba(94,234,212,0.22) !important;
+                    background: rgba(94,234,212,0.12) !important;
                     color: #5eead4 !important;
-                }
-                .mm-tool-btn.active:hover {
-                    background: rgba(94, 234, 212, 0.25) !important;
                 }
                 .mm-tool-btn.rotate-btn {
-                    background: rgba(94, 234, 212, 0.08) !important;
+                    border-color: rgba(94,234,212,0.12) !important;
+                    background: rgba(94,234,212,0.06) !important;
                     color: #5eead4 !important;
                 }
-                .mm-tool-btn.rotate-btn:hover {
-                    background: rgba(94, 234, 212, 0.20) !important;
-                }
                 .mm-tool-btn.pip-btn {
-                    background: rgba(124, 124, 248, 0.08) !important;
-                    color: #9b9bf8 !important;
-                }
-                .mm-tool-btn.pip-btn:hover {
-                    background: rgba(124, 124, 248, 0.20) !important;
+                    border-color: rgba(124,124,248,0.12) !important;
+                    background: rgba(124,124,248,0.06) !important;
+                    color: #a5a5ff !important;
                 }
                 .mm-tool-btn.pip-btn.active {
-                    background: rgba(124, 124, 248, 0.25) !important;
-                    color: #c4c4ff !important;
+                    border-color: rgba(124,124,248,0.28) !important;
+                    background: rgba(124,124,248,0.16) !important;
+                    color: #d0d0ff !important;
                 }
                 .mm-tool-btn.pip-btn.disabled {
-                    opacity: 0.4 !important;
+                    opacity: 0.38 !important;
                     cursor: not-allowed !important;
                 }
-                /* 窗口全屏按钮 - 黄色系 */
                 .mm-tool-btn.window-fullscreen-btn {
-                    background: rgba(251, 191, 36, 0.08) !important;
-                    color: #fbbf24 !important;
-                }
-                .mm-tool-btn.window-fullscreen-btn:hover {
-                    background: rgba(251, 191, 36, 0.20) !important;
-                }
-                .mm-tool-btn.window-fullscreen-btn.active {
-                    background: rgba(251, 191, 36, 0.25) !important;
+                    border-color: rgba(251,191,36,0.12) !important;
+                    background: rgba(251,191,36,0.06) !important;
                     color: #fcd34d !important;
                 }
-                .mm-tool-btn.reset-rotate {
-                    background: rgba(255,255,255,0.04) !important;
-                    color: rgba(255,255,255,0.25) !important;
-                    font-size: 10px !important;
-                    padding: 3px 6px !important;
+                .mm-tool-btn.window-fullscreen-btn.active {
+                    border-color: rgba(251,191,36,0.28) !important;
+                    background: rgba(251,191,36,0.14) !important;
+                    color: #fde68a !important;
                 }
-                .mm-tool-btn.reset-rotate:hover {
-                    background: rgba(255,255,255,0.10) !important;
-                    color: #fff !important;
+                .mm-tool-btn.reset-rotate {
+                    padding: 7px 8px !important;
+                    font-size: 12px !important;
+                    color: rgba(255,255,255,0.35) !important;
                 }
 
                 /* 底部按钮区域 */
                 .mm-actions {
-                    display: flex !important;
-                    justify-content: center !important;
-                    gap: 8px !important;
-                    margin-top: 10px !important;
-                    padding-top: 10px !important;
-                    border-top: 1px solid rgba(255,255,255,0.04) !important;
+                    display: grid !important;
+                    grid-template-columns: repeat(3, 1fr) !important;
+                    gap: 7px !important;
+                    margin-top: 12px !important;
+                    padding-top: 0 !important;
+                    border-top: none !important;
                 }
                 .mm-btn {
-                    padding: 5px 18px !important;
-                    border: none !important;
-                    border-radius: 8px !important;
-                    font-size: 12px !important;
+                    padding: 8px 6px !important;
+                    border: 1px solid rgba(255,255,255,0.06) !important;
+                    border-radius: 10px !important;
+                    font-size: 11px !important;
                     font-weight: 500 !important;
                     cursor: pointer !important;
                     font-family: inherit !important;
-                    background: rgba(255,255,255,0.05) !important;
-                    color: rgba(255,255,255,0.45) !important;
-                    transition: all 0.2s !important;
+                    background: rgba(255,255,255,0.04) !important;
+                    color: rgba(255,255,255,0.55) !important;
+                    transition: all 0.18s ease !important;
                 }
-                .mm-btn:hover { background: rgba(255,255,255,0.10) !important; color: #fff !important; }
+                .mm-btn:hover {
+                    background: rgba(255,255,255,0.1) !important;
+                    color: #fff !important;
+                }
+                .mm-btn#mm-fab-btn {
+                    border-color: rgba(124,124,248,0.2) !important;
+                    background: rgba(124,124,248,0.08) !important;
+                    color: #b0b0ff !important;
+                }
                 .mm-btn.primary {
-                    background: rgba(91,91,239,0.18) !important;
-                    color: #9b9bf8 !important;
+                    border-color: rgba(248,113,113,0.2) !important;
+                    background: rgba(248,113,113,0.08) !important;
+                    color: #fca5a5 !important;
                 }
-                .mm-btn.primary:hover { background: rgba(91,91,239,0.30) !important; color: #c4c4ff !important; }
 
                 /* 快捷键脚注 */
                 .mm-footer {
-                    text-align: center !important;
-                    margin-top: 10px !important;
-                    padding-top: 8px !important;
-                    border-top: 1px solid rgba(255,255,255,0.03) !important;
+                    margin-top: 12px !important;
+                    padding: 12px 4px 2px !important;
+                    border-top: 1px solid rgba(255,255,255,0.05) !important;
                     font-size: 10px !important;
-                    color: rgba(255,255,255,0.18) !important;
-                    letter-spacing: 0.3px !important;
-                    font-weight: 400 !important;
-                    line-height: 1.8 !important;
+                    color: rgba(255,255,255,0.3) !important;
                 }
+                .mm-footer-row {
+                    display: flex !important;
+                    align-items: center !important;
+                    justify-content: center !important;
+                    flex-wrap: wrap !important;
+                    gap: 8px 10px !important;
+                }
+                .mm-footer-sep { color: rgba(255,255,255,0.12) !important; }
                 .mm-footer kbd {
                     display: inline-block !important;
-                    padding: 0 7px !important;
+                    padding: 2px 8px !important;
+                    margin-left: 3px !important;
                     font-size: 10px !important;
                     font-weight: 500 !important;
-                    font-family: 'SF Mono', 'Fira Code', monospace !important;
-                    color: rgba(255,255,255,0.35) !important;
-                    background: rgba(255,255,255,0.05) !important;
-                    border-radius: 4px !important;
-                    border: 1px solid rgba(255,255,255,0.04) !important;
-                    letter-spacing: 0.2px !important;
+                    font-family: 'SF Mono', Consolas, monospace !important;
+                    color: rgba(190,190,255,0.85) !important;
+                    background: rgba(124,124,248,0.1) !important;
+                    border-radius: 6px !important;
+                    border: 1px solid rgba(124,124,248,0.14) !important;
                 }
             `;
-            document.head.appendChild(css);
+        };
+
+        const _ensureFresh = () => {
+            _injectStyles();
+            const domPanel = document.getElementById('mm-panel');
+            if (domPanel && domPanel !== _panel) {
+                domPanel.remove();
+                _panel = null;
+                _fab = false;
+            }
+            if (_panel?.dataset.mmVer === MM_VER) return;
+            if (_panel) {
+                const vis = _visible && !_closed;
+                const fab = _fab;
+                const pos = _fabPos ? { ..._fabPos } : null;
+                _clearIdle();
+                _clearMorphTimer();
+                _panel.remove();
+                _panel = null;
+                _fab = false;
+                if (vis) {
+                    _render();
+                    if (fab && pos) {
+                        _fabPos = pos;
+                        _fab = true;
+                        _panel.classList.add('mm-fab');
+                        _panel.title = '点击展开控制面板';
+                        _applyFabPos();
+                    } else {
+                        _visible = true;
+                        _closed = false;
+                        _panel.classList.remove('mm-hidden');
+                        _panel.style.display = '';
+                        _armIdle();
+                    }
+                }
+            }
         };
 
         const _clearMorphTimer = () => {
@@ -1666,7 +1742,7 @@
             if (!el) el = _panel?.querySelector('#mm-status');
             if (!el) return;
             if (!info) {
-                el.innerHTML = '📭 未检测到媒体';
+                el.innerHTML = '<span class="mm-status-line">📭 未检测到媒体</span>';
                 return;
             }
             const icon = info.paused ? '⏸' : '▶';
@@ -1674,7 +1750,7 @@
             const pipText = info.isPiP ? ' <span class="pip-active">📺 画中画</span>' : '';
             const fsText = info.isWindowFullscreen ? ' <span class="fullscreen-active">🖥 窗口全屏</span>' : '';
             const blockedText = (!info.pipAllowed && !info.isPiP) ? ' <span class="pip-blocked">🚫 画中画禁用</span>' : '';
-            el.innerHTML = `<span class="hl">${info.total}</span> 个 · ${icon} ${info.paused ? '暂停' : '播放中'}${info.muted ? ' 🔇' : ''}${rotText}${pipText}${fsText}${blockedText}<br>🔊 音量 ${info.volume.toFixed(2)}`;
+            el.innerHTML = `<span class="mm-status-line"><span class="hl">${info.total}</span> 个 · ${icon} ${info.paused ? '暂停' : '播放中'}${info.muted ? ' 🔇' : ''}${rotText}${pipText}${fsText}${blockedText}</span><span class="mm-status-vol">🔊 音量 ${info.volume.toFixed(2)}</span>`;
         };
 
         const _startStatusLoop = () => {
@@ -1740,6 +1816,7 @@
             _panel = document.createElement('div');
             _panel.className = 'mm-overlay';
             _panel.id = 'mm-panel';
+            _panel.dataset.mmVer = MM_VER;
             _panel.innerHTML = `
                 <div class="mm-fab-icon" aria-hidden="true">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1762,23 +1839,29 @@
                     <input type="range" class="mm-slider gold" id="mm-gain" min="0" max="3" step="0.05" value="${_gain}">
                 </div>
                 <div class="mm-tools-group">
-                    <span class="label">🛠 工具</span>
-                    <span class="badge" id="mm-rotation-label">${currentRotLabel}</span>
-                    <div style="display:flex;gap:3px;flex-wrap:wrap;">
+                    <div class="mm-tools-head">
+                        <span class="label">🛠 工具</span>
+                        <span class="badge" id="mm-rotation-label">${currentRotLabel}</span>
+                    </div>
+                    <div class="mm-tools-btns">
                         <button class="mm-tool-btn rotate-btn" id="mm-rotate-btn">⟳ 旋转</button>
-                        <button class="mm-tool-btn reset-rotate" id="mm-rotate-reset">↺</button>
+                        <button class="mm-tool-btn reset-rotate" id="mm-rotate-reset" title="旋转复位">↺</button>
                         <button class="mm-tool-btn pip-btn" id="mm-pip-btn">📺 画中画</button>
                         <button class="mm-tool-btn window-fullscreen-btn" id="mm-window-fullscreen-btn">🖥 窗口全屏</button>
                     </div>
                 </div>
-                <div class="mm-status" id="mm-status">⏳ 初始化...</div>
+                <div class="mm-status" id="mm-status"><span class="mm-status-line">⏳ 初始化...</span></div>
                 <div class="mm-actions">
                     <button class="mm-btn" id="mm-reset">↺ 重置</button>
                     <button class="mm-btn" id="mm-fab-btn" title="缩小为悬浮球">◉ 悬浮球</button>
                     <button class="mm-btn primary" id="mm-close">✕ 关闭</button>
                 </div>
                 <div class="mm-footer">
-                    ⌨ 切换面板 <kbd>Ctrl+Shift+M</kbd> &nbsp;|&nbsp; 窗口全屏 <kbd>Ctrl+Shift+F</kbd>
+                    <div class="mm-footer-row">
+                        <span>⌨ 面板 <kbd>Ctrl+Shift+M</kbd></span>
+                        <span class="mm-footer-sep">|</span>
+                        <span>全屏 <kbd>Ctrl+Shift+F</kbd></span>
+                    </div>
                 </div>
                 </div>
             `;
@@ -2020,6 +2103,7 @@
         };
 
         const _show = () => {
+            _ensureFresh();
             if (!_panel) _render();
             if (!_panel) return;
             _panel.classList.remove('mm-hidden');
@@ -2063,6 +2147,7 @@
             show: _show,
             hide: _hide,
             toggle: _toggle,
+            ensureFresh: _ensureFresh,
             get visible() { return _visible; },
             get closed() { return _closed; },
             updateStatus: _updateStatus
@@ -2076,6 +2161,8 @@
         const init = () => {
             if (window.__MM_INITED) return;
             window.__MM_INITED = true;
+
+            PanelUI.ensureFresh();
 
             const saved = StorageEngine.load();
             MediaEngine.setSpeed(saved.speed);
@@ -2139,7 +2226,7 @@
                 }, 800);
             });
 
-            console.log('🎯 Media Master Pro v3.2.0 已加载');
+            console.log('🎯 Media Master Pro v3.2.1 已加载');
             console.log('  ⌨ Ctrl+Shift+M  → 切换面板（悬浮球时展开）');
             console.log('  ⌨ Ctrl+Shift+F  → 窗口全屏（视频充满当前窗口）');
             console.log('  ⌨ ESC           → 退出窗口全屏');
